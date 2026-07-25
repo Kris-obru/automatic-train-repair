@@ -688,6 +688,64 @@ local function pending_is_empty(pending)
 	return pending == nil or next(pending) == nil
 end
 
+local function train_centroid_near(centroid, other_centroid, radius2)
+	if not centroid or not other_centroid then
+		return false
+	end
+	local dx = centroid.x - other_centroid.x
+	local dy = centroid.y - other_centroid.y
+	return (dx * dx + dy * dy) <= (radius2 or 400)
+end
+
+-- True if this live train belongs to the repair job (near + lineage), not an unrelated twin consist.
+local function train_belongs_to_repair_job(train, job, old_id_1, old_id_2)
+	if not train or not train.valid or not job then
+		return false
+	end
+	local first = train.carriages[1]
+	if not first then
+		return false
+	end
+	if job.force_name and job.force_name ~= first.force.name then
+		return false
+	end
+	if job.surface_index and job.surface_index ~= first.surface.index then
+		return false
+	end
+	local centroid = train_centroid_from_list(train.carriages)
+	if not train_centroid_near(centroid, job.centroid, 400) then
+		return false
+	end
+	local function id_linked(id)
+		if not id then
+			return false
+		end
+		return id == job.source_train_id or id == job.live_train_id
+	end
+	if id_linked(train.id) or id_linked(old_id_1) or id_linked(old_id_2) then
+		return true
+	end
+	if job.member_unit_numbers then
+		for _, carriage in pairs(train.carriages) do
+			if job.member_unit_numbers[carriage.unit_number] then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function claim_train_for_repair_job(job, train)
+	if not job or not train or not train.valid then
+		return
+	end
+	job.live_train_id = train.id
+	job.member_unit_numbers = job.member_unit_numbers or {}
+	for _, carriage in pairs(train.carriages) do
+		job.member_unit_numbers[carriage.unit_number] = true
+	end
+end
+
 local function train_near_repair_context(train)
 	if not train or not train.valid then
 		return false
@@ -803,20 +861,8 @@ local function register_train(train, opts)
 		end
 	end
 
-	-- If this train id still has no timetable, pull one from scheduled history nearby.
-	if not opts.force_identity and schedule_score(schedule) == 0 and first then
-		local hist = find_scheduled_history_record(first)
-		if hist and hist.schedule then
-			schedule = deep_copy(hist.schedule)
-			schedule_tick = hist.schedule_tick or schedule_tick
-			if (not group or group == "") and hist.group then
-				group = hist.group
-			end
-			if hist.was_automatic then
-				was_automatic = true
-			end
-		end
-	end
+	-- Do not invent schedules from nearby history for empty trains — that hijacks
+	-- brand-new placements. History is only merged on death/job attach/rebuild paths.
 
 	storage.ick_trains[train_id] = {
 		train_id = train_id,
@@ -899,6 +945,10 @@ local function inherit_identity_onto_train_record(train, old_id_1, old_id_2)
 			merge_identity_into(record, storage.ick_trains[oid])
 		end
 	end
+	-- Brand-new placement (no prior train ids): do not absorb nearby cache/jobs.
+	if not old_id_1 and not old_id_2 then
+		return
+	end
 	local first = train.carriages[1]
 	if first then
 		local cached = find_cached_identity(first, record.expected)
@@ -907,17 +957,9 @@ local function inherit_identity_onto_train_record(train, old_id_1, old_id_2)
 		end
 	end
 	if storage.ick_repair_jobs and first then
-		for job_id, job in pairs(storage.ick_repair_jobs) do
-			if job.surface_index == first.surface.index
-				and job.force_name == first.force.name
-				and job.centroid
-				and record.centroid
-			then
-				local dx = job.centroid.x - record.centroid.x
-				local dy = job.centroid.y - record.centroid.y
-				if dx * dx + dy * dy <= 400 then
-					merge_identity_into(record, job)
-				end
+		for _, job in pairs(storage.ick_repair_jobs) do
+			if train_belongs_to_repair_job(train, job, old_id_1, old_id_2) then
+				merge_identity_into(record, job)
 			end
 		end
 	end
@@ -1116,10 +1158,23 @@ local function create_repair_job_from_record(record, entity)
 	return job_id
 end
 
-local function arm_schedule_restore(job)
+local function arm_schedule_restore(job, train)
 	ensure_storage()
 	local token = storage.ick_next_job_id
 	storage.ick_next_job_id = token + 1
+	local members = {}
+	if job.member_unit_numbers then
+		for unit, flag in pairs(job.member_unit_numbers) do
+			if flag then
+				members[unit] = true
+			end
+		end
+	end
+	if train and train.valid then
+		for _, carriage in pairs(train.carriages) do
+			members[carriage.unit_number] = true
+		end
+	end
 	storage.ick_awaiting_restore[token] = {
 		expected = deep_copy(job.expected),
 		group = job.group,
@@ -1130,12 +1185,38 @@ local function arm_schedule_restore(job)
 		force_name = job.force_name,
 		surface_index = job.surface_index,
 		centroid = deep_copy(job.centroid),
+		source_train_id = job.source_train_id,
+		live_train_id = (train and train.valid and train.id) or job.live_train_id,
+		member_unit_numbers = members,
 		expire_tick = game.tick + 600,
 	}
 	return token
 end
 
-local function try_apply_awaiting_restore(train)
+local function awaiting_restore_linked(train, waiting, old_id_1, old_id_2)
+	if not train or not waiting then
+		return false
+	end
+	local function id_linked(id)
+		if not id then
+			return false
+		end
+		return id == waiting.source_train_id or id == waiting.live_train_id
+	end
+	if id_linked(train.id) or id_linked(old_id_1) or id_linked(old_id_2) then
+		return true
+	end
+	if waiting.member_unit_numbers then
+		for _, carriage in pairs(train.carriages) do
+			if waiting.member_unit_numbers[carriage.unit_number] then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function try_apply_awaiting_restore(train, old_id_1, old_id_2)
 	if not train or not storage.ick_awaiting_restore then
 		return false
 	end
@@ -1154,6 +1235,7 @@ local function try_apply_awaiting_restore(train)
 		elseif waiting.surface_index == surface_index
 			and waiting.force_name == force_name
 			and counts_match(waiting.expected, actual)
+			and awaiting_restore_linked(train, waiting, old_id_1, old_id_2)
 		then
 			local near = true
 			if waiting.centroid and centroid then
@@ -1418,7 +1500,10 @@ local function find_train_near_job(job)
 	}
 	for _, carriage in pairs(candidates) do
 		local train = carriage.train
-		if train and counts_match(job.expected, count_carriages(train)) then
+		if train
+			and counts_match(job.expected, count_carriages(train))
+			and train_belongs_to_repair_job(train, job)
+		then
 			return train, carriage
 		end
 	end
@@ -1431,6 +1516,10 @@ local function try_complete_repair_job(job_id, entity)
 		return
 	end
 	local train = entity and entity.valid and entity.train
+	if train and not train_belongs_to_repair_job(train, job) then
+		-- Never complete/hijack against an unrelated matching consist.
+		return
+	end
 	local counts_ok = train and counts_match(job.expected, count_carriages(train))
 
 	-- If the live consist already matches, leftover "pending" ghost regs are stale
@@ -1476,6 +1565,7 @@ local function try_complete_repair_job(job_id, entity)
 				apply_train_identity(train, job.group, job.schedule)
 				train.manual_mode = was_manual
 				job.schedule_applied_train_id = train.id
+				claim_train_for_repair_job(job, train)
 				register_train(train, {force_identity = true, remember = true})
 			end
 			job.awaiting_refuel = true
@@ -1484,7 +1574,8 @@ local function try_complete_repair_job(job_id, entity)
 		-- Preserve player automatic if they already enabled it (e.g. after fueling by hand).
 		local player_had_auto = train.manual_mode == false
 		job.awaiting_refuel = nil
-		arm_schedule_restore(job)
+		claim_train_for_repair_job(job, train)
+		arm_schedule_restore(job, train)
 		apply_train_identity(train, job.group, job.schedule)
 		if player_had_auto or (job.was_automatic and settings.global["ick-automatic-mode"].value) then
 			train.manual_mode = false
@@ -1525,7 +1616,7 @@ local function try_complete_jobs_for_train(train)
 		return
 	end
 	for job_id, job in pairs(storage.ick_repair_jobs) do
-		if counts_match(job.expected, actual) then
+		if counts_match(job.expected, actual) and train_belongs_to_repair_job(train, job) then
 			try_complete_repair_job(job_id, first)
 		end
 	end
@@ -1603,14 +1694,16 @@ script.on_event(defines.events.on_train_created, function(event)
 	end
 	register_train(event.train)
 	inherit_identity_onto_train_record(event.train, event.old_train_id_1, event.old_train_id_2)
-	try_apply_awaiting_restore(event.train)
+	try_apply_awaiting_restore(event.train, event.old_train_id_1, event.old_train_id_2)
 	if storage.ick_repair_jobs and event.train then
 		for job_id, job in pairs(storage.ick_repair_jobs) do
-			if event.train.carriages[1] then
-				try_complete_repair_job(job_id, event.train.carriages[1])
-			end
-			if not pending_is_empty(job.pending) and storage.ick_repair_jobs[job_id] then
-				hold_train(event.train)
+			if train_belongs_to_repair_job(event.train, job, event.old_train_id_1, event.old_train_id_2) then
+				if event.train.carriages[1] then
+					try_complete_repair_job(job_id, event.train.carriages[1])
+				end
+				if not pending_is_empty(job.pending) and storage.ick_repair_jobs[job_id] then
+					hold_train(event.train)
+				end
 			end
 		end
 	end
@@ -2000,6 +2093,11 @@ local function built_entity(entity)
 				local job = storage.ick_repair_jobs[stored_info.job_id]
 				job.pending[registration_number] = nil
 				job.built[registration_number] = true
+				job.member_unit_numbers = job.member_unit_numbers or {}
+				job.member_unit_numbers[entity.unit_number] = true
+				if entity.train then
+					claim_train_for_repair_job(job, entity.train)
+				end
 				-- Only keep forcing manual while cars are still missing; awaiting-refuel must not.
 				if not pending_is_empty(job.pending) then
 					hold_entity_train(entity)

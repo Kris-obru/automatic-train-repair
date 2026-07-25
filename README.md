@@ -4,7 +4,7 @@
 
 **Mod name:** `kris-ick-automatic-train-repair`  
 
-**Version:** 2.2.0  
+**Version:** 2.2.1  
 
 **Factorio:** 2.0+ (Space Age compatible)  
 
@@ -20,7 +20,7 @@ When rolling stock is destroyed, the consist is stopped, ghosts are created for 
 
 
 
-**Portal / install name must match** `info.json` → folder / zip: `kris-ick-automatic-train-repair_2.2.0/`.
+**Portal / install name must match** `info.json` → folder / zip: `kris-ick-automatic-train-repair_2.2.1/`.
 
 
 
@@ -90,6 +90,7 @@ When rolling stock is destroyed, the consist is stopped, ghosts are created for 
 - Empty mid-repair snapshots do **not** erase a richer stored schedule/group.
 
 - **Player schedule edits** are stamped and preferred over older cached/frozen timetables on rebuild.
+- Brand-new placed trains do **not** absorb nearby repair jobs / identity cache; schedule restore is limited to trains linked to that repair.
 
 - Lookup **hard-prefers history entries that still have a schedule** and disregards blank live/rebuild snapshots when a scheduled record exists nearby (same force/surface).
 
@@ -243,7 +244,7 @@ Setting IDs keep the `ick-*` prefix for save compatibility with the original mod
 
 ```
 
-kris-ick-automatic-train-repair_2.2.0/
+kris-ick-automatic-train-repair_2.2.1/
 
   info.json          # name must be kris-ick-automatic-train-repair
 

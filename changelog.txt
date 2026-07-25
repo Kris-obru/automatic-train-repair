@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 2.2.1
+Date: 2026-07-24
+  Bugfixes:
+    - Newly placed trains no longer inherit schedules from unrelated open repair jobs or nearby history.
+    - Repair completion and awaiting-restore only apply to trains linked to that job (proximity alone is not enough).
+    - Brand-new placements (no old train ids) no longer merge nearby identity cache/jobs into the registry.
+
+---------------------------------------------------------------------------------------------------
 Version: 2.2.0
 Date: 2026-07-24
   Features:
