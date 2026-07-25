@@ -33,6 +33,8 @@ local function ensure_storage()
 	storage.ick_unit_to_train = storage.ick_unit_to_train or {}
 	-- Longer-lived identity for rebuild/re-kill cycles (new unit numbers lose registry links).
 	storage.ick_identity_cache = storage.ick_identity_cache or {}
+	-- Live carriages we asked construction bots to refuel after running empty.
+	storage.ick_empty_fuel_requests = storage.ick_empty_fuel_requests or {}
 end
 
 local function add_request(request_map, name, quality, fuel_count, grid_count)
@@ -166,8 +168,8 @@ local function positions_close(a, b)
 end
 
 -- Fuel request count from a 0–100% of inventory capacity setting.
-local function fuel_request_amount(item_name, fuel_inv)
-	local percent = settings.global["ick-fuel-amount"].value or 100
+local function fuel_request_amount(item_name, fuel_inv, percent_setting_name)
+	local percent = settings.global[percent_setting_name or "ick-fuel-amount"].value or 100
 	if percent <= 0 then
 		return 0
 	end
@@ -1225,6 +1227,181 @@ local function train_meets_refuel_threshold(train)
 	return true
 end
 
+---------------------------------------------------------------------------
+-- Live empty-fuel requests (standalone from repair-ghost fuel settings)
+---------------------------------------------------------------------------
+
+local function clear_empty_fuel_request(carriage)
+	if not carriage or not carriage.valid or not carriage.unit_number then
+		return
+	end
+	ensure_storage()
+	local info = storage.ick_empty_fuel_requests[carriage.unit_number]
+	if not info then
+		return
+	end
+	-- Only destroy the proxy we created; leave unrelated module/fuel proxies alone.
+	local proxy = carriage.item_request_proxy
+	if proxy and proxy.valid and (not info.proxy_unit or proxy.unit_number == info.proxy_unit) then
+		proxy.destroy()
+	end
+	storage.ick_empty_fuel_requests[carriage.unit_number] = nil
+end
+
+local function fuel_item_compatible_with_carriage(carriage, fuel_name)
+	local item = prototypes.item[fuel_name]
+	if not item then
+		return false
+	end
+	if not item.fuel_category then
+		return false
+	end
+	local burner = carriage.burner
+	if not burner then
+		return true
+	end
+	local cats = burner.fuel_categories
+	if not cats then
+		return true
+	end
+	return cats[item.fuel_category] == true
+end
+
+local function proxy_already_requests_fuel(proxy, fuel_name)
+	if not proxy or not proxy.valid then
+		return false
+	end
+	local plans = proxy.insert_plan
+	if not plans then
+		return false
+	end
+	for _, plan in pairs(plans) do
+		if plan.id and plan.id.name == fuel_name then
+			return true
+		end
+	end
+	return false
+end
+
+local function request_fuel_for_empty_carriage(carriage)
+	if not carriage or not carriage.valid then
+		return
+	end
+	if not settings.global["ick-empty-fuel-request"].value then
+		clear_empty_fuel_request(carriage)
+		return
+	end
+
+	local fuel_name = settings.global["ick-empty-fuel-type"].value
+	if not fuel_name or fuel_name == "" or not prototypes.item[fuel_name] then
+		clear_empty_fuel_request(carriage)
+		return
+	end
+
+	local fuel_inv = carriage.get_fuel_inventory()
+	if not fuel_inv or #fuel_inv == 0 then
+		return
+	end
+
+	ensure_storage()
+	-- Only act when the burner inventory is completely empty.
+	if not fuel_inv.is_empty() then
+		clear_empty_fuel_request(carriage)
+		return
+	end
+
+	if not fuel_item_compatible_with_carriage(carriage, fuel_name) then
+		clear_empty_fuel_request(carriage)
+		return
+	end
+
+	local amount = fuel_request_amount(fuel_name, fuel_inv, "ick-empty-fuel-percent")
+	if amount <= 0 then
+		clear_empty_fuel_request(carriage)
+		return
+	end
+
+	-- Reuse an existing proxy if it already asks for this fuel (don't thrash bots).
+	local existing = carriage.item_request_proxy
+	if existing and existing.valid and proxy_already_requests_fuel(existing, fuel_name) then
+		local info = storage.ick_empty_fuel_requests[carriage.unit_number] or {}
+		info.tick = game.tick
+		info.proxy_unit = existing.unit_number
+		storage.ick_empty_fuel_requests[carriage.unit_number] = info
+		return
+	end
+
+	local request_map = {}
+	if existing and existing.valid then
+		merge_insert_plans(request_map, existing.insert_plan)
+	end
+	add_request(request_map, fuel_name, "normal", amount, 0)
+	local insert_plan = build_insert_plan(request_map)
+	if not next(insert_plan) then
+		return
+	end
+
+	if existing and existing.valid then
+		local ok = pcall(function()
+			existing.insert_plan = insert_plan
+		end)
+		if ok then
+			storage.ick_empty_fuel_requests[carriage.unit_number] = {
+				tick = game.tick,
+				proxy_unit = existing.unit_number,
+			}
+		end
+		return
+	end
+
+	-- Live entities need an item-request-proxy; insert_plan is not writable on locomotives.
+	local proxy
+	local ok = pcall(function()
+		proxy = carriage.surface.create_entity{
+			name = "item-request-proxy",
+			position = carriage.position,
+			force = carriage.force,
+			target = carriage,
+			modules = insert_plan,
+		}
+	end)
+	if ok and proxy and proxy.valid then
+		storage.ick_empty_fuel_requests[carriage.unit_number] = {
+			tick = game.tick,
+			proxy_unit = proxy.unit_number,
+		}
+	end
+end
+
+local function scan_trains_for_empty_fuel()
+	if not game or not game.train_manager then
+		return
+	end
+	if not settings.global["ick-empty-fuel-request"].value then
+		-- Feature off: clear any proxies we previously created.
+		if storage.ick_empty_fuel_requests and next(storage.ick_empty_fuel_requests) then
+			for _, train in pairs(game.train_manager.get_trains{}) do
+				if train and train.valid then
+					for _, carriage in pairs(train.carriages) do
+						clear_empty_fuel_request(carriage)
+					end
+				end
+			end
+			for unit, _ in pairs(storage.ick_empty_fuel_requests) do
+				storage.ick_empty_fuel_requests[unit] = nil
+			end
+		end
+		return
+	end
+	for _, train in pairs(game.train_manager.get_trains{}) do
+		if train and train.valid then
+			for _, carriage in pairs(train.carriages) do
+				request_fuel_for_empty_carriage(carriage)
+			end
+		end
+	end
+end
+
 local function find_train_near_job(job)
 	if not job or not job.centroid or not job.surface_index or not job.force_name then
 		return nil, nil
@@ -1464,6 +1641,12 @@ end)
 script.on_event(defines.events.on_train_changed_state, function(event)
 	-- Keep layout current while trains move.
 	register_train(event.train)
+	-- Trains often change state when they run out of fuel; request promptly.
+	if event.train and event.train.valid then
+		for _, carriage in pairs(event.train.carriages) do
+			request_fuel_for_empty_carriage(carriage)
+		end
+	end
 end)
 
 script.on_nth_tick(300, function()
@@ -1474,6 +1657,11 @@ script.on_nth_tick(300, function()
 		end
 		cleanup_expired_train_records()
 	end
+end)
+
+-- Empty-fuel bot requests for live trains (standalone from repair-ghost fuel).
+script.on_nth_tick(60, function()
+	scan_trains_for_empty_fuel()
 end)
 
 
@@ -1885,6 +2073,7 @@ end)
 script.on_event(defines.events.on_player_fast_transferred, function(event)
 	local entity = event.entity
 	if entity and entity.valid and entity.train then
+		request_fuel_for_empty_carriage(entity)
 		try_complete_jobs_for_train(entity.train)
 	end
 end)

@@ -1,4 +1,15 @@
 ---------------------------------------------------------------------------------------------------
+Version: 2.2.0
+Date: 2026-07-24
+  Features:
+    - Live trains that completely run out of fuel can request more from construction bots (toggle, fuel type, and request percent — separate from repair-ghost fuel settings).
+  Changes:
+    - Reorganized map settings into Repair behavior, Repair ghost fuel, and Empty-train fuel groups.
+  Bugfixes:
+    - Empty-train fuel requests use item-request-proxy (insert_plan is only valid on ghosts/proxies, not live locomotives).
+    - Skip incompatible fuel categories; reuse an existing proxy instead of recreating it every second.
+
+---------------------------------------------------------------------------------------------------
 Version: 2.1.0
 Date: 2026-07-22
   Bugfixes:
