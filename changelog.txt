@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 2.2.2
+Date: 2026-07-27
+  Changes:
+    - Fuel type settings accept common typos (Solid-fuel, Solid Fuel) and resolve to the internal item ID; invalid names print a one-time warning with examples.
+  Bugfixes:
+    - Empty-train / repair-ghost fuel requests no longer silently fail on capitalized or spaced fuel names.
+
+---------------------------------------------------------------------------------------------------
 Version: 2.2.1
 Date: 2026-07-24
   Bugfixes:

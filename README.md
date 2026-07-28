@@ -4,7 +4,7 @@
 
 **Mod name:** `kris-ick-automatic-train-repair`  
 
-**Version:** 2.2.1  
+**Version:** 2.2.2  
 
 **Factorio:** 2.0+ (Space Age compatible)  
 
@@ -20,7 +20,7 @@ When rolling stock is destroyed, the consist is stopped, ghosts are created for 
 
 
 
-**Portal / install name must match** `info.json` → folder / zip: `kris-ick-automatic-train-repair_2.2.1/`.
+**Portal / install name must match** `info.json` → folder / zip: `kris-ick-automatic-train-repair_2.2.2/`.
 
 
 
@@ -160,7 +160,7 @@ When rolling stock is destroyed, the consist is stopped, ghosts are created for 
 
 | `ick-include-fuel` | `true` | Request fuel on the repair ghost |
 
-| `ick-fuel-type` | *(blank)* | Blank = request whatever was in the burner; else that item name |
+| `ick-fuel-type` | *(blank)* | Internal item ID (e.g. `solid-fuel`); blank = fuel that was in the burner. Typos like `Solid-fuel` auto-correct when possible. |
 
 | `ick-fuel-amount` | `100` | Fuel **request** as % of fuel inventory capacity (0–100) |
 
@@ -176,7 +176,7 @@ When rolling stock is destroyed, the consist is stopped, ghosts are created for 
 
 | `ick-empty-fuel-request` | `true` | Request fuel via bots when a live burner is completely empty |
 
-| `ick-empty-fuel-type` | `coal` | Item name to request (blank disables requests) |
+| `ick-empty-fuel-type` | `coal` | Internal item ID to request (blank disables). Accepts common typos (`Solid-fuel` → `solid-fuel`). |
 
 | `ick-empty-fuel-percent` | `100` | How full to request (0–100% of fuel inventory capacity) |
 
@@ -244,7 +244,7 @@ Setting IDs keep the `ick-*` prefix for save compatibility with the original mod
 
 ```
 
-kris-ick-automatic-train-repair_2.2.1/
+kris-ick-automatic-train-repair_2.2.2/
 
   info.json          # name must be kris-ick-automatic-train-repair
 

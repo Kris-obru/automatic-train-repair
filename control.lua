@@ -35,6 +35,8 @@ local function ensure_storage()
 	storage.ick_identity_cache = storage.ick_identity_cache or {}
 	-- Live carriages we asked construction bots to refuel after running empty.
 	storage.ick_empty_fuel_requests = storage.ick_empty_fuel_requests or {}
+	-- One-time warnings for bad/normalized fuel setting strings (keyed by setting name + raw).
+	storage.ick_fuel_setting_notices = storage.ick_fuel_setting_notices or {}
 end
 
 local function add_request(request_map, name, quality, fuel_count, grid_count)
@@ -184,6 +186,163 @@ local function fuel_request_amount(item_name, fuel_inv, percent_setting_name)
 	end
 	local capacity = slots * stack_size
 	return math.max(1, math.ceil(capacity * percent / 100))
+end
+
+local function item_is_fuel(proto)
+	if not proto then
+		return false
+	end
+	if proto.fuel_category then
+		return true
+	end
+	local ok, value = pcall(function()
+		return proto.fuel_value
+	end)
+	return ok and value and value > 0
+end
+
+-- Lowercase, spaces→hyphens, collapse runs of hyphens (fixes "Solid-fuel", "Solid Fuel", etc.).
+local function normalize_fuel_name_key(raw)
+	if not raw or type(raw) ~= "string" then
+		return ""
+	end
+	local s = string.lower(raw)
+	s = string.gsub(s, "%s+", "-")
+	s = string.gsub(s, "_+", "-")
+	s = string.gsub(s, "%-+", "-")
+	s = string.gsub(s, "^%-+", "")
+	s = string.gsub(s, "%-+$", "")
+	return s
+end
+
+-- Display-ish aliases → internal IDs (after normalize strips spaces/case).
+local FUEL_NAME_ALIASES = {
+	["solidfuel"] = "solid-fuel",
+	["rocketfuel"] = "rocket-fuel",
+	["nuclearfuel"] = "nuclear-fuel",
+	["wood"] = "wood",
+	["coal"] = "coal",
+}
+
+-- Cache: normalized key / lowercase / no-hyphen → real prototype name (fuels only).
+local fuel_name_index = nil
+
+local function rebuild_fuel_name_index()
+	fuel_name_index = {}
+	for name, proto in pairs(prototypes.item) do
+		if item_is_fuel(proto) then
+			fuel_name_index[name] = name
+			fuel_name_index[string.lower(name)] = name
+			local norm = normalize_fuel_name_key(name)
+			fuel_name_index[norm] = name
+			fuel_name_index[string.gsub(norm, "%-", "")] = name
+		end
+	end
+end
+
+local function lookup_fuel_in_index(key)
+	if not key or key == "" then
+		return nil
+	end
+	if not fuel_name_index then
+		rebuild_fuel_name_index()
+	end
+	return fuel_name_index[key]
+end
+
+-- Resolve a typed fuel setting to a real fuel item ID, or nil if blank/invalid.
+-- Returns: resolved_name_or_nil, status ("blank"|"exact"|"normalized"|"invalid")
+local function resolve_fuel_item_name(raw)
+	if not raw or type(raw) ~= "string" then
+		return nil, "blank"
+	end
+	-- Trim leftover whitespace (settings also auto_trim).
+	local trimmed = string.match(raw, "^%s*(.-)%s*$") or raw
+	if trimmed == "" then
+		return nil, "blank"
+	end
+
+	local exact = prototypes.item[trimmed]
+	if item_is_fuel(exact) then
+		return trimmed, "exact"
+	end
+
+	local norm = normalize_fuel_name_key(trimmed)
+	local no_hyphen = string.gsub(norm, "%-", "")
+
+	local alias = FUEL_NAME_ALIASES[norm] or FUEL_NAME_ALIASES[no_hyphen]
+	if alias and item_is_fuel(prototypes.item[alias]) then
+		return alias, "normalized"
+	end
+
+	local resolved = lookup_fuel_in_index(trimmed)
+		or lookup_fuel_in_index(string.lower(trimmed))
+		or lookup_fuel_in_index(norm)
+		or lookup_fuel_in_index(no_hyphen)
+	if resolved and item_is_fuel(prototypes.item[resolved]) then
+		if resolved == trimmed then
+			return resolved, "exact"
+		end
+		return resolved, "normalized"
+	end
+
+	return nil, "invalid"
+end
+
+local function print_fuel_setting_notice(message)
+	if not game or not game.players then
+		return
+	end
+	for _, player in pairs(game.players) do
+		if player.valid and player.connected then
+			player.print(message)
+		end
+	end
+end
+
+-- Resolve a fuel setting once; warn at most once per distinct raw value until the setting changes.
+local function resolve_configured_fuel(setting_name)
+	ensure_storage()
+	local raw = settings.global[setting_name].value
+	local resolved, status = resolve_fuel_item_name(raw)
+	local notice_key = setting_name .. "\0" .. tostring(raw)
+
+	if status == "blank" then
+		return nil
+	end
+
+	if status == "normalized" and resolved then
+		if not storage.ick_fuel_setting_notices[notice_key] then
+			storage.ick_fuel_setting_notices[notice_key] = true
+			print_fuel_setting_notice(
+				"[Automatic train repair] Interpreted \"" .. tostring(raw) .. "\" as \"" .. resolved .. "\"."
+			)
+		end
+		return resolved
+	end
+
+	if status == "invalid" or not resolved then
+		if not storage.ick_fuel_setting_notices[notice_key] then
+			storage.ick_fuel_setting_notices[notice_key] = true
+			print_fuel_setting_notice(
+				"[Automatic train repair] Unknown fuel \"" .. tostring(raw)
+					.. "\". Use the internal item ID (lowercase, hyphens), e.g. solid-fuel, coal, rocket-fuel, nuclear-fuel."
+			)
+		end
+		return nil
+	end
+
+	return resolved
+end
+
+local function clear_fuel_setting_notices_for(setting_name)
+	ensure_storage()
+	local prefix = setting_name .. "\0"
+	for key, _ in pairs(storage.ick_fuel_setting_notices) do
+		if string.sub(key, 1, #prefix) == prefix then
+			storage.ick_fuel_setting_notices[key] = nil
+		end
+	end
 end
 
 local function serialize_schedule_record(record)
@@ -1269,8 +1428,9 @@ local function carriage_fuel_fill_ratio(carriage)
 		return nil
 	end
 	local fallback_stack = 50
-	local fuel_type = settings.global["ick-fuel-type"].value
-	if fuel_type ~= "" and prototypes.item[fuel_type] then
+	-- Quiet resolve only — do not warn here; this is just a capacity estimate.
+	local fuel_type = select(1, resolve_fuel_item_name(settings.global["ick-fuel-type"].value))
+	if fuel_type and prototypes.item[fuel_type] then
 		fallback_stack = prototypes.item[fuel_type].stack_size
 	end
 	local filled = 0
@@ -1374,8 +1534,8 @@ local function request_fuel_for_empty_carriage(carriage)
 		return
 	end
 
-	local fuel_name = settings.global["ick-empty-fuel-type"].value
-	if not fuel_name or fuel_name == "" or not prototypes.item[fuel_name] then
+	local fuel_name = resolve_configured_fuel("ick-empty-fuel-type")
+	if not fuel_name then
 		clear_empty_fuel_request(carriage)
 		return
 	end
@@ -1432,8 +1592,12 @@ local function request_fuel_for_empty_carriage(carriage)
 				tick = game.tick,
 				proxy_unit = existing.unit_number,
 			}
+			return
 		end
-		return
+		-- Update failed — drop the stale proxy and create a fresh one below.
+		pcall(function()
+			existing.destroy()
+		end)
 	end
 
 	-- Live entities need an item-request-proxy; insert_plan is not writable on locomotives.
@@ -1672,6 +1836,7 @@ end)
 
 script.on_configuration_changed(function()
 	ensure_storage()
+	fuel_name_index = nil
 	-- ick-fuel-amount used to be an absolute count (0 = full inventory). It is now 0–100%.
 	if not storage.ick_migrated_fuel_amount_percent then
 		local current = settings.global["ick-fuel-amount"].value
@@ -1681,6 +1846,17 @@ script.on_configuration_changed(function()
 		storage.ick_migrated_fuel_amount_percent = true
 	end
 	refresh_all_trains()
+end)
+
+script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
+	if event.setting_type ~= "runtime-global" then
+		return
+	end
+	if event.setting == "ick-empty-fuel-type" or event.setting == "ick-fuel-type" then
+		clear_fuel_setting_notices_for(event.setting)
+		-- Re-resolve immediately so the player sees interpret/unknown feedback now.
+		resolve_configured_fuel(event.setting)
+	end
 end)
 
 script.on_event(defines.events.on_train_created, function(event)
@@ -1964,16 +2140,15 @@ script.on_event(defines.events.on_entity_died, function(event)
 
 		local request_map = {}
 		if settings.global["ick-include-fuel"].value then
-			local fuel_type = settings.global["ick-fuel-type"].value
-			if fuel_type ~= "" and prototypes.item[fuel_type] then
+			local fuel_type = resolve_configured_fuel("ick-fuel-type")
+			if fuel_type then
 				add_request(request_map, fuel_type, "normal", fuel_request_amount(fuel_type, fuel_inv), 0)
 			elseif fuel_inv and fuel_inv.is_empty() == false then
 				for _, item in pairs(fuel_inv.get_contents()) do
 					add_request(request_map, item.name, item.quality, fuel_request_amount(item.name, fuel_inv), 0)
 				end
-			elseif fuel_inv and settings.global["ick-fuel-type"].value == "" then
-				-- No fuel left in burner: still request a full inventory of the preferred fuel if set elsewhere — skip.
 			end
+			-- Blank or invalid ick-fuel-type with empty burner: skip preferred-fuel request.
 		end
 
 		if settings.global["ick-include-equipment"].value and has_equipment then
