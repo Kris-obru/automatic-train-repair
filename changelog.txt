@@ -1,4 +1,12 @@
 ---------------------------------------------------------------------------------------------------
+Version: 2.3.0
+Date: 2026-11-06
+  Changes:
+    - Updated for Factorio 2.1 (`factorio_version` 2.1, `base >= 2.1.0`).
+  Bugfixes:
+    - Use `fuel_categories` (array) instead of removed `fuel_category` so empty-train and repair fuel detection works on 2.1.
+
+---------------------------------------------------------------------------------------------------
 Version: 2.2.2
 Date: 2026-07-27
   Changes:

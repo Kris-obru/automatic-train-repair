@@ -192,7 +192,9 @@ local function item_is_fuel(proto)
 	if not proto then
 		return false
 	end
-	if proto.fuel_category then
+	-- Factorio 2.1: fuel_category was replaced with fuel_categories (array).
+	local cats = proto.fuel_categories
+	if cats and cats[1] then
 		return true
 	end
 	local ok, value = pcall(function()
@@ -1495,18 +1497,25 @@ local function fuel_item_compatible_with_carriage(carriage, fuel_name)
 	if not item then
 		return false
 	end
-	if not item.fuel_category then
+	-- Factorio 2.1: item fuel categories are an array; burner categories stay a lookup map.
+	local item_cats = item.fuel_categories
+	if not item_cats or not item_cats[1] then
 		return false
 	end
 	local burner = carriage.burner
 	if not burner then
 		return true
 	end
-	local cats = burner.fuel_categories
-	if not cats then
+	local burner_cats = burner.fuel_categories
+	if not burner_cats then
 		return true
 	end
-	return cats[item.fuel_category] == true
+	for _, category in pairs(item_cats) do
+		if burner_cats[category] then
+			return true
+		end
+	end
+	return false
 end
 
 local function proxy_already_requests_fuel(proxy, fuel_name)

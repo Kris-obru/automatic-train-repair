@@ -4,15 +4,15 @@
 
 **Mod name:** `kris-ick-automatic-train-repair`  
 
-**Version:** 2.2.2  
+**Version:** 2.3.0  
 
-**Factorio:** 2.0+ (Space Age compatible)  
+**Factorio:** 2.1+ (Space Age compatible)  
 
 **License:** MIT  
 
 
 
-Fork of [ickputzdirwech/ick-automatic-train-repair](https://github.com/ickputzdirwech/ick-automatic-train-repair) for Factorio 2.0.
+Fork of [ickputzdirwech/ick-automatic-train-repair](https://github.com/ickputzdirwech/ick-automatic-train-repair) for Factorio 2.1.
 
 
 
@@ -20,7 +20,7 @@ When rolling stock is destroyed, the consist is stopped, ghosts are created for 
 
 
 
-**Portal / install name must match** `info.json` → folder / zip: `kris-ick-automatic-train-repair_2.2.2/`.
+**Portal / install name must match** `info.json` → folder / zip: `kris-ick-automatic-train-repair_2.3.0/`.
 
 
 
@@ -190,6 +190,36 @@ Setting IDs keep the `ick-*` prefix for save compatibility with the original mod
 
 
 
+## Compatibility
+
+
+
+Requires **Factorio 2.1+** (`base >= 2.1.0`). Not dual-compatible with 2.0 (item fuel APIs changed: `fuel_category` → `fuel_categories`).
+
+
+
+### Smoke-test checklist (2.1)
+
+
+
+1. Mod loads on Factorio 2.1.x with no errors.
+
+2. Empty-train fuel (`coal` / `solid-fuel`) creates an item-request-proxy; bots deliver.
+
+3. Fuel setting typo `Solid-fuel` still resolves and requests.
+
+4. Destroy a multi-car scheduled train → ghosts + fuel/equipment → rebuild → schedule/group/automatic restore (with and without require-refuel).
+
+5. Place a brand-new twin consist while another repair is open — it must **not** inherit that schedule.
+
+6. Optional: quality loco empty-fuel + repair restore; upgrade planner mid-repair does not soft-lock the job.
+
+
+
+---
+
+
+
 ## Limitations
 
 
@@ -244,7 +274,7 @@ Setting IDs keep the `ick-*` prefix for save compatibility with the original mod
 
 ```
 
-kris-ick-automatic-train-repair_2.2.2/
+kris-ick-automatic-train-repair_2.3.0/
 
   info.json          # name must be kris-ick-automatic-train-repair
 
@@ -280,7 +310,7 @@ Zip the **versioned folder**, not loose files. `info.json` `"name"` must match t
 
 - Original: **ickputzdirwech**
 
-- Factorio 2.0 fork: **Kristian432** — [kris-ick-automatic-train-repair](https://github.com/Kris-obru/kris-ick-automatic-train-repair)
+- Factorio 2.1 fork: **Kristian432** — [kris-ick-automatic-train-repair](https://github.com/Kris-obru/kris-ick-automatic-train-repair)
 
 
 
